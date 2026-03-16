@@ -3,6 +3,7 @@ use crate::{errors::ShellErrors, state::ShellState};
 pub enum BuiltIn {
     Cd(String),
     Export(String, String),
+    Echo(String),
     Unset(String),
     Set(String, String),
     ReadOnly(String, String),
@@ -12,7 +13,7 @@ pub enum BuiltIn {
 }
 
 pub fn is_builtin(cmd: &str) -> bool {
-    matches!(cmd, "cd" | "export" | "unset" | "set" | "readonly" | "exec" | "eval" | "exit")
+    matches!(cmd, "cd" | "export" | "unset" | "set" | "readonly" | "exec" | "eval" | "exit" | "echo")
 }
 
 fn parse_builtin_cmd(cmd: &str) -> Option<BuiltIn> {
@@ -20,6 +21,7 @@ fn parse_builtin_cmd(cmd: &str) -> Option<BuiltIn> {
     match parts[0] {
         "cd" => Some(BuiltIn::Cd(parts[1].to_string())),
         "export" => Some(BuiltIn::Export(parts[1].to_string(), parts[2].to_string())),
+        "echo" => Some(BuiltIn::Echo(parts[1..].join(" "))),
         "unset" => Some(BuiltIn::Unset(parts[1].to_string())),
         "set" => Some(BuiltIn::Set(parts[1].to_string(), parts[2].to_string())),
         "readonly" => Some(BuiltIn::ReadOnly(parts[1].to_string(), parts[2].to_string())),
@@ -45,6 +47,18 @@ pub fn run_builtin_cmd(cmd: BuiltIn, state: &mut ShellState) -> Result<(), Shell
         },
         BuiltIn::Export(key, value) => {
             state.set_env_var(key, value);
+            Ok(())
+        },
+        BuiltIn::Echo(val) => {
+            println!("{}", val);
+            if val.starts_with("$") {
+                let var_name = &val[1..];
+                if let Some(var_value) = state.get_env_var(var_name) {
+                    println!("{}", var_value);
+                } else {
+                    println!("{}: Undefined variable", var_name);
+                }
+            }
             Ok(())
         },
         BuiltIn::Unset(key) => {

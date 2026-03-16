@@ -50,6 +50,7 @@ impl ShellState {
         // check the new path exists and is a directory
         if new_path.exists() && new_path.is_dir() {
             self.current_dir = new_path;
+            std::env::set_current_dir(&self.current_dir)?;
             return Ok(());
         }
 

@@ -18,7 +18,6 @@ pub fn run_shell() -> anyhow::Result<()>{
 
                 if let Err(err) = run_cmd(&line, &mut state) {
                     println!("Error: {:?}", err);
-                    anyhow::bail!(err);
                 }
             },
             Err(ReadlineError::Interrupted) => {
