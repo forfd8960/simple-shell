@@ -1,4 +1,5 @@
 pub mod cmd;
-pub mod ioloop;
-pub(crate) mod state;
 pub mod errors;
+pub mod ioloop;
+pub(crate) mod parser;
+pub(crate) mod state;
