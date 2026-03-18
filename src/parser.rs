@@ -42,13 +42,13 @@ pub fn parse_words(words: Vec<String>) -> Vec<Token> {
 }
 
 /// `Command` 枚举代表了 Shell 语法树中的任意一种命令结构 [2]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// 顺序执行或后台执行的列表，由 `;` 或 `&` 连接 [3, 9]
     List {
         left: Box<Command>,
         separator: ListSeparator,
-        right: Box<Command>,
+        right: Option<Box<Command>>,
     },
 
     /// AND-OR 列表，由 `&&` 或 `||` 连接的命令 [3]
@@ -70,7 +70,7 @@ pub enum Command {
 // ---------------------------------------------------------
 
 /// `SimpleCommand` 包含一个基础命令的所有元素 [7]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SimpleCommand {
     pub cmds: Vec<String>,        // 命令及其参数列表，例如 ["ls", "-l"] [7]
     pub io_rds: Vec<Redirection>, // 该命令的所有 I/O 重定向操作 [16, 17]
@@ -95,7 +95,7 @@ pub enum ListSeparator {
 // ---------------------------------------------------------
 
 /// 表示 I/O 重定向操作，如 `2> error.log` 或 `< input.txt` [16, 17]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Redirection {
     /// 可选的源文件描述符 (例如 `2>...` 中的 2) [17]
     /// 如果未指定，默认输入为 0，输出为 1 [18, 19]
@@ -163,7 +163,7 @@ impl Parser {
     }
 
     fn is_end(&self) -> bool {
-        self.current_pos > self.tokens.len()
+        self.current_pos >= self.tokens.len()
     }
 
     pub fn parse_tokens(&mut self) -> Result<Vec<Command>, ShellErrors> {
@@ -184,14 +184,25 @@ impl Parser {
                 Token::Ampersand => ListSeparator::Async,
                 _ => break,
             };
-            self.next(); // consume the separator
 
-            let right = self.parse_and_or()?;
-            left = Command::List {
-                left: Box::new(left),
-                separator,
-                right: Box::new(right),
-            };
+            let _ = self.consume()?; // consume the separator
+
+            // if cmd line is end after ; or &
+            if self.is_end() {
+                left = Command::List {
+                    left: Box::new(left),
+                    separator,
+                    right: None,
+                };
+                break;
+            } else {
+                let right = self.parse_and_or()?;
+                left = Command::List {
+                    left: Box::new(left),
+                    separator,
+                    right: Some(Box::new(right)),
+                };
+            }
         }
 
         Ok(left)
@@ -234,6 +245,10 @@ impl Parser {
             }
         }
 
+        if simple_commands.len() == 1 {
+            return Ok(simple_commands[0].clone());
+        }
+
         Ok(Command::Pipeline(simple_commands))
     }
 
@@ -260,7 +275,9 @@ impl Parser {
                         return Err(ShellErrors::ExpectedFileName);
                     }
                 }
-                _ => {}
+                _ => {
+                    break;
+                }
             }
         }
 
@@ -271,14 +288,15 @@ impl Parser {
     }
 }
 
-pub fn parse_command(cmd_line: &str) -> Vec<Command> {
+pub fn parse_command(cmd_line: &str) -> Result<Vec<Command>, ShellErrors> {
     let words = lex_words(cmd_line);
     let tokens = parse_words(words);
     println!("Tokens: {:?}", tokens);
 
-    let parser = Parser::new(tokens);
+    let mut parser = Parser::new(tokens);
 
-    Vec::new()
+    println!("parsing into AST");
+    parser.parse_tokens()
 }
 
 fn token_to_redirect_op(token: Token) -> Result<RedirectOp, ShellErrors> {
@@ -292,6 +310,12 @@ fn token_to_redirect_op(token: Token) -> Result<RedirectOp, ShellErrors> {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
+    use crate::parser::{
+        Command, ListSeparator, RedirectOp, Redirection, SimpleCommand, parse_command,
+    };
+
     use super::lex_words;
 
     #[test]
@@ -330,5 +354,110 @@ mod tests {
         assert_eq!(words[2], "|");
         assert_eq!(words[3], "wc");
         assert_eq!(words[4], "-l");
+    }
+
+    #[test]
+    fn test_parse1() {
+        let input = r#"echo "Hello, $USER!""#;
+        let ast_result = parse_command(input);
+        println!("{:?}", ast_result);
+
+        assert!(ast_result.is_ok());
+
+        let ast = ast_result.unwrap();
+        println!("ast: {:?}", ast);
+        assert_eq!(
+            ast,
+            vec![Command::Simple(SimpleCommand {
+                cmds: vec!["echo".to_string(), "Hello, $USER!".to_string()],
+                io_rds: vec![],
+            })]
+        );
+    }
+
+    #[test]
+    fn test_01_single_word_command() {
+        // 测试目的：验证最基本的单个词能否被解析为 SimpleCommand [2]
+        let ast = parse_command("ls").unwrap();
+
+        assert_eq!(ast.len(), 1);
+
+        assert_eq!(
+            ast[0],
+            Command::Simple(SimpleCommand {
+                cmds: vec!["ls".to_string()],
+                io_rds: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn test_parser() {
+        let inputs = vec![r#"ls -l > out.txt &"#];
+
+        let expect_asts = vec![vec![Command::List {
+            left: Box::new(Command::Simple(SimpleCommand {
+                cmds: vec!["ls".to_string(), "-l".to_string()],
+                io_rds: vec![Redirection {
+                    fd: None,
+                    operator: RedirectOp::Output,
+                    target: "out.txt".to_string(),
+                }],
+            })),
+            separator: ListSeparator::Async,
+            right: None,
+        }]];
+
+        for (idx, input) in inputs.iter().enumerate() {
+            let ast_result = parse_command(input);
+            println!("{:?}", ast_result);
+
+            assert!(ast_result.is_ok());
+
+            let ast = ast_result.unwrap();
+            println!("ast: {:?}", ast);
+            assert_eq!(ast, expect_asts[idx]);
+        }
+    }
+
+    #[test]
+    fn test_09_sequential_list() {
+        // 测试目的：验证由 ';' 分隔的命令被解析为顺序执行的 List [10, 13]
+        let ast = parse_command("cd /var/log ; ls -l").unwrap();
+        assert_eq!(
+            ast,
+            vec![Command::List {
+                left: Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec!["cd".to_string(), "/var/log".to_string()],
+                    io_rds: vec![],
+                })),
+                separator: ListSeparator::Sequential,
+                right: Some(Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec!["ls".to_string(), "-l".to_string()],
+                    io_rds: vec![],
+                })))
+            }]
+        )
+    }
+
+    #[test]
+    fn test_10_asynchronous_list() {
+        // 测试目的：验证带有 '&' 后缀的命令被解析为异步（后台）作业 [14]
+        // 按照规范，"&" 也是一种分隔符或终止符
+        let ast = parse_command("sleep 10 & echo 'done'").unwrap();
+        assert_eq!(
+            ast,
+            vec![Command::List {
+                left: Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec!["sleep".to_string(), "10".to_string()],
+                    io_rds: vec![],
+                })),
+                separator: ListSeparator::Async,
+                right: Some(Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec!["echo".to_string(), "done".to_string()],
+                    io_rds: vec![],
+                })))
+            }]
+        )
     }
 }
