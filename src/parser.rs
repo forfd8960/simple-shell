@@ -313,7 +313,7 @@ mod tests {
     use std::vec;
 
     use crate::parser::{
-        Command, ListSeparator, RedirectOp, Redirection, SimpleCommand, parse_command,
+        Command, ListSeparator, LogicalOp, RedirectOp, Redirection, SimpleCommand, parse_command,
     };
 
     use super::lex_words;
@@ -418,6 +418,138 @@ mod tests {
             println!("ast: {:?}", ast);
             assert_eq!(ast, expect_asts[idx]);
         }
+    }
+
+    #[test]
+    fn test_03_input_redirection() {
+        // 测试目的：验证输入重定向 '<' 是否能正确提取目标文件名 [4, 5]
+        let ast = parse_command("cat < input.txt").unwrap();
+        match &ast[0] {
+            Command::Simple(cmd) => {
+                assert_eq!(cmd.cmds, vec!["cat"]);
+                assert_eq!(cmd.io_rds.len(), 1);
+                assert_eq!(cmd.io_rds[0].operator, RedirectOp::Input);
+                assert_eq!(cmd.io_rds[0].target, "input.txt");
+            }
+            _ => panic!("Expected Simple command"),
+        }
+    }
+
+    #[test]
+    fn test_04_multiple_redirections() {
+        // 测试目的：POSIX 规定一个命令可包含多个重定向操作符，按从左到右顺序求值 [4, 6]
+        let ast = parse_command("grep error < file.log > out.txt").unwrap();
+        match &ast[0] {
+            Command::Simple(cmd) => {
+                assert_eq!(cmd.cmds, vec!["grep", "error"]);
+                assert_eq!(cmd.io_rds.len(), 2);
+                assert_eq!(cmd.io_rds[0].operator, RedirectOp::Input);
+                assert_eq!(cmd.io_rds[0].target, "file.log");
+                assert_eq!(cmd.io_rds[1].operator, RedirectOp::Output);
+                assert_eq!(cmd.io_rds[1].target, "out.txt");
+            }
+            _ => panic!("Expected Simple command"),
+        }
+    }
+
+    #[test]
+    fn test_06_multi_stage_pipeline() {
+        // 测试目的：验证长管道能否被展平为长度大于2的 Vec 数组，避免深度嵌套 [8]
+        let ast = parse_command("cat file.txt | grep error | sort | uniq").unwrap();
+        match &ast[0] {
+            Command::Pipeline(cmds) => {
+                assert_eq!(cmds.len(), 4); // 应该包含 4 个连续的简单命令
+                assert_eq!(
+                    cmds[0],
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["cat".to_string(), "file.txt".to_string()],
+                        io_rds: vec![]
+                    })
+                );
+                assert_eq!(
+                    cmds[1],
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["grep".to_string(), "error".to_string()],
+                        io_rds: vec![]
+                    })
+                );
+                assert_eq!(
+                    cmds[2],
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["sort".to_string()],
+                        io_rds: vec![]
+                    })
+                );
+                assert_eq!(
+                    cmds[3],
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["uniq".to_string()],
+                        io_rds: vec![]
+                    })
+                );
+            }
+            _ => panic!("Expected Pipeline command"),
+        }
+    }
+
+    #[test]
+    fn test_07_logical_and() {
+        // 测试目的：验证 "&&" 能否正确构建具有左结合性的 AndOr 树 [10, 11]
+        let ast = parse_command("make clean && make all").unwrap();
+        match &ast[0] {
+            Command::AndOr {
+                left,
+                operator,
+                right,
+            } => {
+                assert_eq!(*operator, LogicalOp::And);
+                assert_eq!(
+                    *left,
+                    Box::new(Command::Simple(SimpleCommand {
+                        cmds: vec!["make".to_string(), "clean".to_string()],
+                        io_rds: vec![]
+                    }))
+                );
+                assert_eq!(
+                    *right,
+                    Box::new(Command::Simple(SimpleCommand {
+                        cmds: vec!["make".to_string(), "all".to_string()],
+                        io_rds: vec![]
+                    }))
+                );
+            }
+            _ => panic!("Expected AndOr command"),
+        }
+    }
+
+    #[test]
+    fn test_08_logical_or_with_pipeline() {
+        // 测试目的：验证 "||" 分隔的元素可以是一个 Pipeline（Pipeline 的优先级高于 AndOr） [10, 12]
+        let ast = parse_command("cat config.json | grep port || echo 'port not found'").unwrap();
+
+        let cmd = &ast[0];
+        println!("{:?}", cmd);
+
+        assert_eq!(
+            *cmd,
+            Command::AndOr {
+                left: Box::new(Command::Pipeline(vec![
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["cat".to_string(), "config.json".to_string()],
+                        io_rds: vec![]
+                    }),
+                    Command::Simple(SimpleCommand {
+                        cmds: vec!["grep".to_string(), "port".to_string()],
+                        io_rds: vec![]
+                    })
+                ])),
+                operator: LogicalOp::Or,
+                right: Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec!["echo".to_string(), "port not found".to_string()],
+                    io_rds: vec![]
+                }))
+            }
+        );
     }
 
     #[test]
