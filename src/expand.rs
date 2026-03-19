@@ -1,4 +1,7 @@
-use crate::{Command, ListSeparator, LogicalOp, SimpleCommand};
+use glob::glob;
+use regex::Regex;
+
+use crate::{Command, ListSeparator, SimpleCommand};
 
 pub fn expand_commands(commands: Vec<Command>) -> Vec<Command> {
     let mut new_commands: Vec<Command> = Vec::new();
@@ -66,14 +69,42 @@ fn expand_simple(simple: SimpleCommand) -> Command {
         .collect::<Vec<String>>();
 
     Command::Simple(SimpleCommand {
-        cmds: expand_cmds,
+        cmds: expand_path(expand_cmds),
         io_rds: simple.io_rds,
     })
 }
 
+fn expand_path(expand_cmds: Vec<String>) -> Vec<String> {
+    let mut new_cmds = Vec::new();
+
+    for cmd in expand_cmds {
+        let cmd_str = cmd.as_str();
+        if is_glob_pattern(cmd_str) {
+            for path in glob(cmd_str).unwrap().filter_map(Result::ok) {
+                println!("{}", path.display());
+                new_cmds.push(path.to_string_lossy().to_string());
+            }
+        } else {
+            new_cmds.push(cmd);
+        }
+    }
+
+    new_cmds
+}
+
+fn is_glob_pattern(word: &str) -> bool {
+    // Matches *, ?, or [ that is either at the beginning of the string
+    // or preceded by a character that is NOT a backslash
+    let re = Regex::new(r"(?:^|[^\\])[*?\[]").unwrap();
+    re.is_match(word)
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{Command, SimpleCommand, expand::expand_simple};
+    use crate::{
+        Command, ListSeparator, SimpleCommand,
+        expand::{expand_commands, expand_simple},
+    };
 
     #[test]
     fn test_expand_simple() {
@@ -87,6 +118,84 @@ mod tests {
             Command::Simple(SimpleCommand {
                 cmds: vec!["echo".to_string(), "/Users/xxx".to_string()],
                 io_rds: vec![]
+            })
+        );
+    }
+
+    #[test]
+    fn test_expand_list() {
+        let sim = expand_commands(vec![Command::List {
+            left: Box::new(Command::Simple(SimpleCommand {
+                cmds: vec!["echo".to_string(), "$PWD".to_string()],
+                io_rds: vec![],
+            })),
+            separator: ListSeparator::Async,
+            right: None,
+        }]);
+
+        assert_eq!(
+            sim,
+            vec![Command::List {
+                left: Box::new(Command::Simple(SimpleCommand {
+                    cmds: vec![
+                        "echo".to_string(),
+                        "~/Documents/Code/2026-rust-projects/simple-shell".to_string()
+                    ],
+                    io_rds: vec![],
+                })),
+                separator: ListSeparator::Async,
+                right: None,
+            }]
+        );
+    }
+
+    #[test]
+    // grep -rl "tests" src/*.rs
+    fn test_expand_glob() {
+        let sim = expand_simple(SimpleCommand {
+            cmds: vec!["src/*.rs".to_string()],
+            io_rds: vec![],
+        });
+
+        assert_eq!(
+            sim,
+            Command::Simple(SimpleCommand {
+                cmds: vec![
+                    "src/errors.rs".to_string(),
+                    "src/expand.rs".to_string(),
+                    "src/lib.rs".to_string(),
+                    "src/main.rs".to_string(),
+                    "src/parser.rs".to_string(),
+                    "src/state.rs".to_string(),
+                ],
+                io_rds: vec![],
+            })
+        );
+    }
+
+    #[test]
+    // grep -rl "tests" src/*.rs
+    fn test_expand_glob1() {
+        let sim = expand_simple(SimpleCommand {
+            cmds: r#"grep -rl "tests" src/*.rs"#.split(" ").map(|w| w.to_string()).collect(),
+            io_rds: vec![],
+        });
+
+        assert_eq!(
+            sim,
+            Command::Simple(SimpleCommand {
+                cmds: vec![
+                    "grep".to_string(),
+                    "-rl".to_string(),
+                    "\"tests\"".to_string(),
+                    "src/errors.rs".to_string(),
+                    "src/expand.rs".to_string(),
+                    "src/lib.rs".to_string(),
+                    "src/main.rs".to_string(),
+                    "src/parser.rs".to_string(),
+                    "src/state.rs".to_string(),
+                ],
+                io_rds: vec![],
             })
         );
     }
