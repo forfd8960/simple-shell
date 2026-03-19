@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::parser::Token;
+use crate::Token;
 
 #[derive(Debug, Error)]
 pub enum ShellErrors {
