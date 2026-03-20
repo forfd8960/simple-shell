@@ -1,5 +1,7 @@
 use crate::{errors::ShellErrors, state::ShellState};
 
+pub mod ext;
+
 pub enum BuiltIn {
     Cd(String),
     Export(String, String),
