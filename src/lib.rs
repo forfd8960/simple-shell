@@ -42,6 +42,17 @@ pub enum Command {
     Simple(SimpleCommand),
 }
 
+impl Command {
+    /// 尝试将 `Command` 转换为 `SimpleCommand`，如果不是简单命令则返回 `None`
+    pub fn as_simple(&self) -> Option<&SimpleCommand> {
+        if let Command::Simple(simple) = self {
+            Some(simple)
+        } else {
+            None
+        }
+    }
+}
+
 // ---------------------------------------------------------
 // 简单命令的具体定义
 // ---------------------------------------------------------
@@ -56,8 +67,10 @@ pub struct SimpleCommand {
 /// 逻辑操作符 [3, 4]
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalOp {
+    /// Run if previous succeeded
     And, // &&
-    Or,  // ||
+    /// Run if previous failed
+    Or, // ||
 }
 
 /// 列表分隔符 [3, 15]

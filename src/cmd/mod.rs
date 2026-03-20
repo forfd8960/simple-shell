@@ -1,4 +1,12 @@
-use crate::{errors::ShellErrors, state::ShellState};
+use std::cell::RefCell;
+
+use crate::{
+    cmd::ext::CommandRunner,
+    errors::ShellErrors,
+    expand::{self, expand_commands},
+    parser::{Parser, lex_words, parse_words},
+    state::ShellState,
+};
 
 pub mod ext;
 
@@ -15,7 +23,10 @@ pub enum BuiltIn {
 }
 
 pub fn is_builtin(cmd: &str) -> bool {
-    matches!(cmd, "cd" | "export" | "unset" | "set" | "readonly" | "exec" | "eval" | "exit" | "echo")
+    matches!(
+        cmd,
+        "cd" | "export" | "unset" | "set" | "readonly" | "exec" | "eval" | "exit" | "echo"
+    )
 }
 
 fn parse_builtin_cmd(cmd: &str) -> Option<BuiltIn> {
@@ -26,31 +37,49 @@ fn parse_builtin_cmd(cmd: &str) -> Option<BuiltIn> {
         "echo" => Some(BuiltIn::Echo(parts[1..].join(" "))),
         "unset" => Some(BuiltIn::Unset(parts[1].to_string())),
         "set" => Some(BuiltIn::Set(parts[1].to_string(), parts[2].to_string())),
-        "readonly" => Some(BuiltIn::ReadOnly(parts[1].to_string(), parts[2].to_string())),
-        "exec" => Some(BuiltIn::Exec(parts[1].to_string(), parts[2..].iter().map(|s| s.to_string()).collect())),
+        "readonly" => Some(BuiltIn::ReadOnly(
+            parts[1].to_string(),
+            parts[2].to_string(),
+        )),
+        "exec" => Some(BuiltIn::Exec(
+            parts[1].to_string(),
+            parts[2..].iter().map(|s| s.to_string()).collect(),
+        )),
         "eval" => Some(BuiltIn::Eval(parts[1..].join(" "))),
         "exit" => Some(BuiltIn::Exit),
         _ => None,
     }
 }
 
-pub fn run_cmd(cmd: &str, state: &mut ShellState) -> Result<(), ShellErrors>   {
+pub fn run_cmd(cmd: &str, state: &mut ShellState) -> Result<(), ShellErrors> {
     if let Some(builtin) = parse_builtin_cmd(cmd) {
         return run_builtin_cmd(builtin, state);
     }
 
-    Err(ShellErrors::NotSupportedCmd(cmd.to_string()))
+    let words = lex_words(cmd);
+    let tokens = parse_words(words);
+
+    println!("Tokens: {:?}", tokens);
+
+    let mut parser = Parser::new(tokens);
+    let cmds = parser.parse_tokens()?;
+    println!("Parsed Commands: {:?}", cmds);
+
+    let expanded_cmds = expand_commands(cmds);
+    println!("Expanded Commands: {:?}", expanded_cmds);
+
+    let mut runner = CommandRunner::new(RefCell::new(state));
+    println!("Running Commands...");
+    runner.run_ext_cmds(expanded_cmds)
 }
 
 pub fn run_builtin_cmd(cmd: BuiltIn, state: &mut ShellState) -> Result<(), ShellErrors> {
     match cmd {
-        BuiltIn::Cd(path) => {
-            state.change_dir("cd", &path)
-        },
+        BuiltIn::Cd(path) => state.change_dir("cd", &path),
         BuiltIn::Export(key, value) => {
             state.set_env_var(key, value);
             Ok(())
-        },
+        }
         BuiltIn::Echo(val) => {
             println!("{}", val);
             if val.starts_with("$") {
@@ -62,15 +91,15 @@ pub fn run_builtin_cmd(cmd: BuiltIn, state: &mut ShellState) -> Result<(), Shell
                 }
             }
             Ok(())
-        },
+        }
         BuiltIn::Unset(key) => {
             state.unset_env_var(&key);
             Ok(())
-        },
+        }
         BuiltIn::Set(key, value) => {
             state.set_env_var(key, value);
             Ok(())
-        },
+        }
         BuiltIn::ReadOnly(key, value) => {
             state.set_env_var(key, value);
             Ok(())
@@ -78,11 +107,11 @@ pub fn run_builtin_cmd(cmd: BuiltIn, state: &mut ShellState) -> Result<(), Shell
         BuiltIn::Exec(cmd, args) => {
             println!("Executing command: {} with args: {:?}", cmd, args);
             Ok(())
-        },
+        }
         BuiltIn::Eval(cmd) => {
             println!("Evaluating command: {}", cmd);
             Ok(())
-        },
+        }
         BuiltIn::Exit => {
             println!("Exiting shell...");
             std::process::exit(0);

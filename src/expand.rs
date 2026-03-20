@@ -35,7 +35,7 @@ pub fn expand_commands(commands: Vec<Command>) -> Vec<Command> {
             }
 
             Command::Pipeline(cmds) => {
-                new_commands.extend(expand_commands(cmds));
+                new_commands.push(Command::Pipeline(expand_commands(cmds)));
             }
 
             Command::Simple(cmd) => {
