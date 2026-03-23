@@ -203,17 +203,6 @@ impl Parser {
     }
 }
 
-pub fn parse_command(cmd_line: &str) -> Result<Vec<Command>, ShellErrors> {
-    let words = lex_words(cmd_line);
-    let tokens = parse_words(words);
-    println!("Tokens: {:?}", tokens);
-
-    let mut parser = Parser::new(tokens);
-
-    println!("parsing into AST");
-    parser.parse_tokens()
-}
-
 fn token_to_redirect_op(token: Token) -> Result<RedirectOp, ShellErrors> {
     match token {
         Token::Less => Ok(RedirectOp::Input),
@@ -227,11 +216,22 @@ fn token_to_redirect_op(token: Token) -> Result<RedirectOp, ShellErrors> {
 mod tests {
     use std::vec;
 
-    use crate::parser::{
-        Command, ListSeparator, LogicalOp, RedirectOp, Redirection, SimpleCommand, parse_command,
-    };
+    use crate::{errors::ShellErrors, parser::{
+        Command, ListSeparator, LogicalOp, Parser, RedirectOp, Redirection, SimpleCommand, parse_words
+    }};
 
     use super::lex_words;
+
+    fn parse_command(cmd_line: &str) -> Result<Vec<Command>, ShellErrors> {
+        let words = lex_words(cmd_line);
+        let tokens = parse_words(words);
+        println!("Tokens: {:?}", tokens);
+
+        let mut parser = Parser::new(tokens);
+
+        println!("parsing into AST");
+        parser.parse_tokens()
+    }
 
     #[test]
     fn test_lex() {
