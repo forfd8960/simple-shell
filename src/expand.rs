@@ -62,6 +62,10 @@ fn expand_list(op: ListSeparator, new_l_r: Vec<Command>) -> Command {
 }
 
 fn expand_simple(simple: SimpleCommand) -> Command {
+    if simple.cmds[0] == "grep" {
+        return Command::Simple(simple);
+    }
+
     let expand_cmds = simple
         .cmds
         .iter()
@@ -77,16 +81,40 @@ fn expand_simple(simple: SimpleCommand) -> Command {
 fn expand_path(expand_cmds: Vec<String>) -> Vec<String> {
     let mut new_cmds = Vec::new();
 
-    for cmd in expand_cmds {
+    let is_find_cmd = expand_cmds.first().is_some_and(|cmd| cmd == "find");
+    let find_pattern_opts = ["-name", "-iname", "-path", "-wholename", "-regex", "-iregex"];
+    let mut previous_arg: Option<String> = None;
+
+    for cmd in expand_cmds.into_iter() {
+        let current_arg = cmd.clone();
         let cmd_str = cmd.as_str();
-        if is_glob_pattern(cmd_str) {
-            for path in glob(cmd_str).unwrap().filter_map(Result::ok) {
-                println!("{}", path.display());
-                new_cmds.push(path.to_string_lossy().to_string());
+        println!("Expanding cmd: {}", cmd_str);
+
+        let is_find_pattern_arg = is_find_cmd
+            && previous_arg
+                .as_deref()
+                .is_some_and(|arg| find_pattern_opts.contains(&arg));
+
+        if is_find_pattern_arg {
+            previous_arg = Some(current_arg);
+            new_cmds.push(cmd);
+            continue;
+        }
+
+        if is_glob_pattern(&cmd_str) {
+            println!("Found glob pattern: {}", cmd_str);
+
+            for entry in glob(cmd_str).expect("Failed to read glob pattern") {
+                match entry {
+                    Ok(path) => new_cmds.push(path.to_string_lossy().to_string()),
+                    Err(e) => println!("Glob error: {:?}", e),
+                }
             }
         } else {
             new_cmds.push(cmd);
         }
+
+        previous_arg = Some(current_arg);
     }
 
     new_cmds
@@ -153,7 +181,10 @@ mod tests {
     // grep -rl "tests" src/*.rs
     fn test_expand_glob() {
         let sim = expand_simple(SimpleCommand {
-            cmds: vec!["src/*.rs".to_string()],
+            cmds: "find . -name \"*.rs\""
+                .split(" ")
+                .map(|w| w.to_string())
+                .collect(),
             io_rds: vec![],
         });
 
@@ -161,12 +192,10 @@ mod tests {
             sim,
             Command::Simple(SimpleCommand {
                 cmds: vec![
-                    "src/errors.rs".to_string(),
-                    "src/expand.rs".to_string(),
-                    "src/lib.rs".to_string(),
-                    "src/main.rs".to_string(),
-                    "src/parser.rs".to_string(),
-                    "src/state.rs".to_string(),
+                    "find".to_string(),
+                    ".".to_string(),
+                    "-name".to_string(),
+                    "\"*.rs\"".to_string(),
                 ],
                 io_rds: vec![],
             })
@@ -188,12 +217,7 @@ mod tests {
                     "grep".to_string(),
                     "-rl".to_string(),
                     "\"tests\"".to_string(),
-                    "src/errors.rs".to_string(),
-                    "src/expand.rs".to_string(),
-                    "src/lib.rs".to_string(),
-                    "src/main.rs".to_string(),
-                    "src/parser.rs".to_string(),
-                    "src/state.rs".to_string(),
+                    "src/*.rs".to_string(),
                 ],
                 io_rds: vec![],
             })

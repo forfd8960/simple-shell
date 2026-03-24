@@ -95,86 +95,75 @@ impl<'a> CommandRunner<'a> {
         op: LogicalOp,
         right: Command,
     ) -> Result<(), ShellErrors> {
-        let child_p = if let Some(simple) = left.as_simple() {
-            Some(self.execute_simple(simple)?)
-        } else {
-            None
+        let success = match left.as_simple() {
+            Some(simple) => {
+                let mut child = self.execute_simple(simple)?;
+                println!("Started background process with PID: {}", child.id());
+                child
+                    .wait()
+                    .expect("Failed to wait on child process")
+                    .success()
+            }
+            None => false,
         };
 
-        let success = if let Some(mut child) = child_p {
-            println!("Started background process with PID: {}", child.id());
-
-            child
-                .wait()
-                .expect("Failed to wait on child process")
-                .success()
-        } else {
-            false
+        let should_run_right = match op {
+            LogicalOp::And => success,
+            LogicalOp::Or => !success,
         };
 
-        if op == LogicalOp::And {
-            if success {
-                println!("Command succeeded, executing next command...");
-                self.execute_cmd(right)?;
-            }
-        } else {
-            if !success {
-                println!("Command failed, executing next command...");
-                self.execute_cmd(right)?;
-            }
+        if should_run_right {
+            self.execute_cmd(right)?;
         }
 
         Ok(())
     }
 
     fn execute_pipe(&mut self, cmds: Vec<Command>) -> Result<(), ShellErrors> {
-        if cmds.len() == 0 {
-            return Ok(());
-        }
-
-        let cmd_len = cmds.len();
-
-        let mut cmd1_child = if let Some(simple) = cmds[0].as_simple() {
-            let mut pipe_cmd1 = self.build_pipe_cmd(simple.clone());
-            pipe_cmd1.stdout(Stdio::piped());
-
-            let pipe_cmd1_child = pipe_cmd1
-                .spawn()
-                .expect("failed to execute first command in pipeline");
-
-            pipe_cmd1_child
-        } else {
-            return Ok(());
+        let (first, rest) = match cmds.split_first() {
+            Some(parts) => parts,
+            None => return Ok(()),
         };
 
-        for (idx, cmd) in cmds[1..].iter().enumerate() {
-            if let Command::Simple(simple) = cmd {
-                let mut pipe_cmd2 = self.build_pipe_cmd(simple.clone());
-                pipe_cmd2.stdin(Stdio::piped());
+        let first_simple = match first.as_simple() {
+            Some(simple) => simple.clone(),
+            None => return Ok(()),
+        };
 
-                if idx == cmd_len - 2 {
-                    let output2 = pipe_cmd2
-                        .stdin(cmd1_child.stdout.expect("Failed to get stdout"))
-                        .output()
-                        .expect(&format!("failed to run command: {:?}", simple.cmds));
+        let mut previous_child = {
+            let mut first_process = self.build_pipe_cmd(first_simple);
+            first_process.stdout(Stdio::piped());
+            first_process
+                .spawn()
+                .expect("failed to execute first command in pipeline")
+        };
 
-                    let result = str::from_utf8(&output2.stdout).expect("failed to decode output");
-                    println!("{}", result);
-                    break;
-                } else {
-                    pipe_cmd2.stdout(Stdio::piped());
+        for (idx, cmd) in rest.iter().enumerate() {
+            let simple = match cmd {
+                Command::Simple(simple) => simple,
+                _ => continue,
+            };
 
-                    let cmd2_child = pipe_cmd2
-                        .stdin(cmd1_child.stdout.expect("Failed to get stdout"))
-                        .spawn()
-                        .expect(&format!(
-                            "failed to execute command: {:?} in pipeline",
-                            simple.cmds
-                        ));
+            let mut next_process = self.build_pipe_cmd(simple.clone());
+            let previous_stdout = previous_child.stdout.take().expect("Failed to get stdout");
+            next_process.stdin(previous_stdout);
 
-                    cmd1_child = cmd2_child;
-                }
+            let is_last_stage = idx == rest.len() - 1;
+
+            if is_last_stage {
+                let output = next_process
+                    .output()
+                    .expect(&format!("failed to run command: {:?}", simple.cmds));
+
+                let result = str::from_utf8(&output.stdout).expect("failed to decode output");
+                println!("{}", result);
+                break;
             }
+
+            next_process.stdout(Stdio::piped());
+            previous_child = next_process
+                .spawn()
+                .expect(&format!("failed to execute command: {:?} in pipeline", simple.cmds));
         }
 
         Ok(())
